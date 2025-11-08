@@ -1,74 +1,78 @@
 from fastapi import FastAPI, Request, HTTPException
 from dotenv import load_dotenv
-import os
-import json
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from difflib import SequenceMatcher
 import torch
 import random
-from difflib import SequenceMatcher
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from wikipedia_api import get_wikipedia_summary # Using your custom wikipedia script
+import os
+import json
+from wikipedia_api import get_wikipedia_summary  # Custom module
 
+# --- Load environment variables ---
 load_dotenv()
 VILOFURY_KEY = os.getenv("VILOFURY_API_KEY")
 
+# --- Initialize FastAPI ---
 app = FastAPI(title="VILOFURY API", version="1.0")
 
-# --- Define the path to the model assets folder ---
-script_dir = os.path.dirname(os.path.realpath(__file__))
-ASSETS_DIR = os.path.join(script_dir, "model_assets")
+# --- Define paths ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSETS_DIR = os.path.join(BASE_DIR, "model_assets")
 
-# --- Define absolute paths for all required files ---
-LABEL_ENCODER_PATH = os.path.join(ASSETS_DIR, "vilofury_label_encoder.pkl")
-MODEL_WEIGHTS_PATH = os.path.join(ASSETS_DIR, "vilofury_model_weights.pth")
-INTENTS_PATH = os.path.join(script_dir, "intents.json")
+INTENTS_PATH = os.path.join(BASE_DIR, "intents.json")
+MODEL_DIR = os.path.join(BASE_DIR, "vilofury_finetuned")
 
-# --- Load intents.json for pattern matching ---
-print("🧠 Loading intents for pattern matching...")
+# --- Load intents ---
+print("🧠 Loading intents...")
 try:
-    with open(INTENTS_PATH, "r", encoding="utf-8") as file:
-        intents = json.load(file)
-except FileNotFoundError:
-    print("❌ ERROR: intents.json not found.")
-    exit()
-print("✅ Intents loaded.")
+    with open(INTENTS_PATH, "r", encoding="utf-8") as f:
+        intents = json.load(f)
+    print("✅ Intents loaded successfully.")
+except Exception as e:
+    print(f"❌ Error loading intents.json: {e}")
+    intents = {"intents": []}
 
-# --- Load Vilofury conversational model ---
-print("🧠 Loading Vilofury conversational model...")
-import os
-script_dir = os.path.dirname(os.path.abspath(__file__))
-convo_model_name = os.path.join(script_dir, "vilofury_finetuned")
-convo_tokenizer = AutoTokenizer.from_pretrained(convo_model_name)
-convo_model = AutoModelForCausalLM.from_pretrained(convo_model_name).to("cpu")
-print("✅ Vilofury model loaded successfully!")
+# --- Load Vilofury fine-tuned model ---
+print("⚙️ Loading Vilofury fine-tuned model...")
+try:
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+    model = AutoModelForCausalLM.from_pretrained(MODEL_DIR)
+    model = model.to("cpu")
+    print("✅ Vilofury model loaded successfully!")
+except Exception as e:
+    print(f"❌ Error loading model: {e}")
+    model = None
 
-
+# --- Middleware for API Key Authentication ---
 @app.middleware("http")
 async def verify_api_key(request: Request, call_next):
-    # Allow open access for docs and home routes
+    # Allow open access to documentation and root
     if request.url.path in ["/", "/docs", "/openapi.json"]:
         return await call_next(request)
 
     api_key = request.headers.get("x-api-key")
     if api_key != VILOFURY_KEY and request.client.host != "127.0.0.1":
         raise HTTPException(status_code=401, detail="Invalid API key")
-    response = await call_next(request)
-    return response
 
+    return await call_next(request)
+
+# --- Root Route ---
 @app.get("/")
 async def home():
-    return {"message": "Welcome to VILOFURY API!"}
+    return {"message": "🚀 Welcome to VILOFURY API — Your Intelligent Assistant"}
 
+# --- Ask Endpoint ---
 @app.get("/ask")
 async def ask_vilofury(q: str):
     user_input = q.strip()
     if not user_input:
         return {"reply": "I didn’t catch that. Could you say something?"}
 
-    # Step 1: Try matching with intents.json
+    # Step 1: Check intents.json
     best_match = None
     best_score = 0.0
-    for intent in intents["intents"]:
-        for pattern in intent["patterns"]:
+    for intent in intents.get("intents", []):
+        for pattern in intent.get("patterns", []):
             score = SequenceMatcher(None, user_input.lower(), pattern.lower()).ratio()
             if score > best_score:
                 best_score = score
@@ -82,20 +86,21 @@ async def ask_vilofury(q: str):
     if summary:
         return {"reply": summary}
 
-    # Step 3: Use fine-tuned conversational model as fallback
-    prompt = f"User: {user_input}\nViloFury:"
-    inputs = convo_tokenizer(prompt, return_tensors="pt")
-    outputs = convo_model.generate(
-        **inputs,
-        max_new_tokens=100,
-        temperature=0.7,
-        top_p=0.9,
-        do_sample=True,
-        pad_token_id=convo_tokenizer.eos_token_id
-    )
-    full_reply = convo_tokenizer.decode(outputs[0], skip_special_tokens=True)
-    reply = full_reply[len(prompt):].strip()
+    # Step 3: Use Vilofury fine-tuned model
+    if model:
+        prompt = f"User: {user_input}\nViloFury:"
+        inputs = tokenizer(prompt, return_tensors="pt")
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=120,
+                temperature=0.7,
+                top_p=0.9,
+                do_sample=True,
+                pad_token_id=tokenizer.eos_token_id
+            )
+        full_reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        reply = full_reply[len(prompt):].strip()
+        return {"reply": reply or "I'm still learning. Could you rephrase that?"}
 
-    return {"reply": reply or "I'm still learning, could you rephrase that?"}
-
-
+    return {"reply": "⚠️ Model not loaded. Please check your model path."}
