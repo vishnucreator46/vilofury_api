@@ -6,7 +6,7 @@ import torch
 import random
 import os
 import json
-from wikipedia_api import get_wikipedia_summary  # Custom module
+from wikipedia_api import get_wikipedia_summary  # Your custom module
 
 # --- Load environment variables ---
 load_dotenv()
@@ -15,12 +15,9 @@ VILOFURY_KEY = os.getenv("VILOFURY_API_KEY")
 # --- Initialize FastAPI ---
 app = FastAPI(title="VILOFURY API", version="1.0")
 
-# --- Define paths ---
+# --- Paths ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ASSETS_DIR = os.path.join(BASE_DIR, "model_assets")
-
 INTENTS_PATH = os.path.join(BASE_DIR, "intents.json")
-MODEL_DIR = os.path.join(BASE_DIR, "vilofury_finetuned")
 
 # --- Load intents ---
 print("🧠 Loading intents...")
@@ -32,13 +29,14 @@ except Exception as e:
     print(f"❌ Error loading intents.json: {e}")
     intents = {"intents": []}
 
-# --- Load Vilofury fine-tuned model ---
-print("⚙️ Loading Vilofury fine-tuned model...")
+# --- Load model from Hugging Face ---
+print("⚙️ Loading Vilofury fine-tuned model from Hugging Face...")
 try:
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
-    model = AutoModelForCausalLM.from_pretrained(MODEL_DIR)
+    HF_REPO = "vishnucreator46/vilofury-finetuned"  # 👈 change if needed
+    tokenizer = AutoTokenizer.from_pretrained(HF_REPO)
+    model = AutoModelForCausalLM.from_pretrained(HF_REPO)
     model = model.to("cpu")
-    print("✅ Vilofury model loaded successfully!")
+    print("✅ Model loaded successfully from Hugging Face!")
 except Exception as e:
     print(f"❌ Error loading model: {e}")
     model = None
@@ -46,7 +44,6 @@ except Exception as e:
 # --- Middleware for API Key Authentication ---
 @app.middleware("http")
 async def verify_api_key(request: Request, call_next):
-    # Allow open access to documentation and root
     if request.url.path in ["/", "/docs", "/openapi.json"]:
         return await call_next(request)
 
@@ -103,4 +100,4 @@ async def ask_vilofury(q: str):
         reply = full_reply[len(prompt):].strip()
         return {"reply": reply or "I'm still learning. Could you rephrase that?"}
 
-    return {"reply": "⚠️ Model not loaded. Please check your model path."}
+    return {"reply": "⚠️ Model not loaded. Please check your Hugging Face path."}
