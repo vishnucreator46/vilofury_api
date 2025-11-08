@@ -34,6 +34,8 @@ print("✅ Intents loaded.")
 
 # --- Load Vilofury conversational model ---
 print("🧠 Loading Vilofury conversational model...")
+import os
+script_dir = os.path.dirname(os.path.abspath(__file__))
 convo_model_name = os.path.join(script_dir, "vilofury_finetuned")
 convo_tokenizer = AutoTokenizer.from_pretrained(convo_model_name)
 convo_model = AutoModelForCausalLM.from_pretrained(convo_model_name).to("cpu")
@@ -95,4 +97,5 @@ async def ask_vilofury(q: str):
     reply = full_reply[len(prompt):].strip()
 
     return {"reply": reply or "I'm still learning, could you rephrase that?"}
+
 
