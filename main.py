@@ -40,7 +40,7 @@ try:
 except Exception as e:
     print(f"❌ Error loading model: {e}")
     model = None
-
+    print("⚠️ Continuing without model. Replies will be generated using intents and Wikipedia only.")
 
 # --- Middleware for API Key Authentication ---
 @app.middleware("http")
@@ -56,12 +56,10 @@ async def verify_api_key(request: Request, call_next):
 
     return await call_next(request)
 
-
 # --- Root Route ---
 @app.get("/")
 async def home():
     return {"message": "🚀 Welcome to VILOFURY API — Your Intelligent Assistant"}
-
 
 # --- Ask Endpoint ---
 @app.get("/ask")
@@ -88,8 +86,11 @@ async def ask_vilofury(q: str):
     if summary:
         return {"reply": summary}
 
-    # Step 3: Use Vilofury fine-tuned model
-    if model:
+    # Step 3: Use Vilofury fine-tuned model (if available)
+    if model is None:
+        return {"reply": "The model is still under development. Please try again later."}
+
+    try:
         prompt = f"User: {user_input}\nViloFury:"
         inputs = tokenizer(prompt, return_tensors="pt")
         with torch.no_grad():
@@ -104,5 +105,6 @@ async def ask_vilofury(q: str):
         full_reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
         reply = full_reply[len(prompt):].strip()
         return {"reply": reply or "I'm still learning. Could you rephrase that?"}
-
-    return {"reply": "⚠️ Model not loaded. Please check your Hugging Face path."}
+    except Exception as e:
+        print("❌ Model error:", e)
+        return {"reply": "⚠️ The model encountered an issue. Please try again later."}
