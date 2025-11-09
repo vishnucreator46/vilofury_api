@@ -32,7 +32,7 @@ except Exception as e:
 # --- Load model from Hugging Face ---
 print("⚙️ Loading Vilofury fine-tuned model from Hugging Face...")
 try:
-    HF_REPO = "vishnucreator46/vilofury-finetuned"  # 👈 change if needed
+    HF_REPO = "vishnucreator46/vilofury-finetuned"  # 👈 your Hugging Face repo
     tokenizer = AutoTokenizer.from_pretrained(HF_REPO)
     model = AutoModelForCausalLM.from_pretrained(HF_REPO)
     model = model.to("cpu")
@@ -48,7 +48,7 @@ async def verify_api_key(request: Request, call_next):
         return await call_next(request)
 
     api_key = request.headers.get("x-api-key")
-    if api_key != VILOFURY_KEY and request.client.host != "127.0.0.1":
+    if VILOFURY_KEY and api_key != VILOFURY_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     return await call_next(request)
@@ -101,3 +101,4 @@ async def ask_vilofury(q: str):
         return {"reply": reply or "I'm still learning. Could you rephrase that?"}
 
     return {"reply": "⚠️ Model not loaded. Please check your Hugging Face path."}
+
