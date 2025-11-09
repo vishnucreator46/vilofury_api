@@ -1,110 +1,107 @@
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from difflib import SequenceMatcher
 import torch
-import random
 import os
+import random
 import json
-from wikipedia_api import get_wikipedia_summary  # Your custom module
 
-# --- Load environment variables ---
-load_dotenv()
-VILOFURY_KEY = os.getenv("VILOFURY_API_KEY")
+from wikipedia_api import get_wikipedia_summary  # Make sure this file exists
 
-# --- Initialize FastAPI ---
-app = FastAPI(title="VILOFURY API", version="1.0")
+load_dotenv()  # Load environment variables
 
-# --- Paths ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INTENTS_PATH = os.path.join(BASE_DIR, "intents.json")
+app = FastAPI()
 
-# --- Load intents ---
-print("🧠 Loading intents...")
-try:
-    with open(INTENTS_PATH, "r", encoding="utf-8") as f:
-        intents = json.load(f)
-    print("✅ Intents loaded successfully.")
-except Exception as e:
-    print(f"❌ Error loading intents.json: {e}")
-    intents = {"intents": []}
+# ✅ Your API key (must match Render environment variable)
+VILOFURY_API_KEY = os.getenv("VILOFURY_API_KEY")
 
-# --- Load model from Hugging Face ---
+# ✅ Load model from Hugging Face
 print("⚙️ Loading Vilofury fine-tuned model from Hugging Face...")
 try:
-    HF_REPO = "vishnucreator46/vilofury-finetuned"  # 👈 your Hugging Face repo
-    tokenizer = AutoTokenizer.from_pretrained(HF_REPO)
-    model = AutoModelForCausalLM.from_pretrained(HF_REPO)
-    model = model.to("cpu")
-    print("✅ Model loaded successfully from Hugging Face!")
+    model_name = "vishnu00l/vilofury-finetuned"  # ✅ corrected model repo
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name)
+    print("✅ Model loaded successfully!")
 except Exception as e:
     print(f"❌ Error loading model: {e}")
-    model = None
-    print("⚠️ Continuing without model. Replies will be generated using intents and Wikipedia only.")
+    model, tokenizer = None, None
 
-# --- Middleware for API Key Authentication ---
-@app.middleware("http")
-async def verify_api_key(request: Request, call_next):
-    # Skip API key check for these routes
-    open_routes = ["/", "/docs", "/openapi.json", "/ask"]
-    if request.url.path in open_routes:
-        return await call_next(request)
 
-    api_key = request.headers.get("x-api-key")
-    if VILOFURY_KEY and api_key != VILOFURY_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+# Helper: Find similarity between strings
+def is_similar(a, b, threshold=0.7):
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio() > threshold
 
-    return await call_next(request)
 
-# --- Root Route ---
 @app.get("/")
-async def home():
+async def root():
     return {"message": "🚀 Welcome to VILOFURY API — Your Intelligent Assistant"}
 
-# --- Ask Endpoint ---
+
 @app.get("/ask")
-async def ask_vilofury(q: str):
-    user_input = q.strip()
-    if not user_input:
-        return {"reply": "I didn’t catch that. Could you say something?"}
+async def ask(request: Request, q: str = "", key: str = None):
+    """
+    The main endpoint — takes query `q` and optional `key` (for security)
+    Example: /ask?q=what%20is%20your%20name&key=YOUR_API_KEY
+    """
 
-    # Step 1: Check intents.json
-    best_match = None
-    best_score = 0.0
-    for intent in intents.get("intents", []):
-        for pattern in intent.get("patterns", []):
-            score = SequenceMatcher(None, user_input.lower(), pattern.lower()).ratio()
-            if score > best_score:
-                best_score = score
-                best_match = intent
+    # ✅ Key check
+    if not key or key != VILOFURY_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
 
-    if best_match and best_score > 0.8:
-        return {"reply": random.choice(best_match["responses"])}
+    # Check if model is loaded
+    if model is None or tokenizer is None:
+        raise HTTPException(status_code=500, detail="Model not loaded on the server.")
 
-    # Step 2: Try Wikipedia summary
-    summary = get_wikipedia_summary(user_input)
-    if summary:
-        return {"reply": summary}
+    # Handle empty queries
+    if not q.strip():
+        return JSONResponse({"reply": "Please enter a valid question."})
 
-    # Step 3: Use Vilofury fine-tuned model (if available)
-    if model is None:
-        return {"reply": "The model is still under development. Please try again later."}
+    # Check for Wikipedia-related queries
+    if any(word in q.lower() for word in ["who", "what", "when", "where", "tell me about"]):
+        wiki_result = get_wikipedia_summary(q)
+        if wiki_result:
+            return JSONResponse({"reply": wiki_result})
 
+    # ✅ Generate response using the Vilofury model
     try:
-        prompt = f"User: {user_input}\nViloFury:"
-        inputs = tokenizer(prompt, return_tensors="pt")
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=120,
-                temperature=0.7,
-                top_p=0.9,
-                do_sample=True,
-                pad_token_id=tokenizer.eos_token_id
-            )
-        full_reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        reply = full_reply[len(prompt):].strip()
-        return {"reply": reply or "I'm still learning. Could you rephrase that?"}
+        inputs = tokenizer.encode(q, return_tensors="pt")
+        outputs = model.generate(
+            inputs,
+            max_length=150,
+            temperature=0.8,
+            do_sample=True,
+            top_p=0.9,
+            pad_token_id=tokenizer.eos_token_id
+        )
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+        # Cleanup the response text
+        response = response.replace(q, "").strip()
+        if not response:
+            response = random.choice([
+                "I'm still learning to answer that.",
+                "Let me think about it...",
+                "Can you please rephrase your question?"
+            ])
+
+        return JSONResponse({"reply": response})
     except Exception as e:
-        print("❌ Model error:", e)
-        return {"reply": "⚠️ The model encountered an issue. Please try again later."}
+        print("Error generating reply:", e)
+        raise HTTPException(status_code=500, detail="Error generating response.")
+
+
+# ✅ Custom error handler for debugging
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.detail}
+    )
+
+
+# ✅ Run locally (Render runs uvicorn automatically)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10000)
