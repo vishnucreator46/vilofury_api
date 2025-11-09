@@ -6,110 +6,99 @@ import torch
 import random
 import os
 import json
-from wikipedia_api import get_wikipedia_summary  # Your custom module
+from wikipedia_api import get_wikipedia_summary  # your custom module
 
-# --- Load environment variables ---
+# Load environment variables
 load_dotenv()
-VILOFURY_KEY = os.getenv("VILOFURY_API_KEY")
+VILOFURY_API_KEY = os.getenv("VILOFURY_API_KEY")
 
-# --- Initialize FastAPI ---
-app = FastAPI(title="VILOFURY API", version="1.0")
+# Initialize FastAPI app
+app = FastAPI(title="ViloFury API", version="1.0")
 
-# --- Paths ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INTENTS_PATH = os.path.join(BASE_DIR, "intents.json")
+# ================================
+# Intent Data (local fallback)
+# ================================
+def load_intents():
+    try:
+        with open("intents.json", "r", encoding="utf-8") as file:
+            data = json.load(file)
+            print("🧠 Intents loaded successfully.")
+            return data
+    except Exception as e:
+        print("⚠️ Error loading intents:", e)
+        return {"intents": []}
 
-# --- Load intents ---
-print("🧠 Loading intents...")
-try:
-    with open(INTENTS_PATH, "r", encoding="utf-8") as f:
-        intents = json.load(f)
-    print("✅ Intents loaded successfully.")
-except Exception as e:
-    print(f"❌ Error loading intents.json: {e}")
-    intents = {"intents": []}
+intents = load_intents()
 
-# --- Load model from Hugging Face ---
+# ================================
+# Load fine-tuned Hugging Face model
+# ================================
 print("⚙️ Loading Vilofury fine-tuned model from Hugging Face...")
+
 try:
-    HF_REPO = "vishnu00/vilofury-finetuned"  # 👈 your correct Hugging Face repo name
-    tokenizer = AutoTokenizer.from_pretrained(HF_REPO)
-    model = AutoModelForCausalLM.from_pretrained(HF_REPO)
-    model = model.to("cpu")
+    model_name = "vishnucreator46/vilofury-finetuned"
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=True)
+    model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=True)
     print("✅ Model loaded successfully from Hugging Face!")
 except Exception as e:
-    print(f"❌ Error loading model: {e}")
-    model = None
+    print("❌ Error loading model:", e)
+    tokenizer, model = None, None
 
-
-# --- Middleware for API Key Authentication ---
-@app.middleware("http")
-async def verify_api_key(request: Request, call_next):
-    # Public routes
-    open_routes = ["/", "/docs", "/openapi.json"]
-
-    if request.url.path in open_routes:
-        return await call_next(request)
-
-    # Get API key from query string or headers
-    api_key = request.query_params.get("key") or request.headers.get("x-api-key")
-
-    if VILOFURY_KEY and api_key != VILOFURY_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    return await call_next(request)
-
-
-# --- Root Route ---
-@app.get("/")
-async def home():
-    return {"message": "🚀 Welcome to VILOFURY API — Your Intelligent Assistant"}
-
-
-# --- Ask Endpoint ---
-@app.get("/ask")
-async def ask_vilofury(q: str, key: str = None):
-    # --- Optional API Key check for direct browser use ---
-    if VILOFURY_KEY and key != VILOFURY_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    user_input = q.strip()
-    if not user_input:
-        return {"reply": "I didn’t catch that. Could you say something?"}
-
-    # Step 1: Match intents.json
+# ================================
+# Helper: match user input to intent
+# ================================
+def get_intent_response(text):
     best_match = None
-    best_score = 0.0
+    highest_ratio = 0.0
+
     for intent in intents.get("intents", []):
         for pattern in intent.get("patterns", []):
-            score = SequenceMatcher(None, user_input.lower(), pattern.lower()).ratio()
-            if score > best_score:
-                best_score = score
+            ratio = SequenceMatcher(None, text.lower(), pattern.lower()).ratio()
+            if ratio > highest_ratio:
+                highest_ratio = ratio
                 best_match = intent
 
-    if best_match and best_score > 0.8:
-        return {"reply": random.choice(best_match["responses"])}
+    if best_match and highest_ratio > 0.7:
+        return random.choice(best_match.get("responses", []))
+    return None
 
-    # Step 2: Try Wikipedia summary
-    try:
-        summary = get_wikipedia_summary(user_input)
-        if summary:
-            return {"reply": summary}
-    except Exception:
-        pass
+# ================================
+# Root endpoint
+# ================================
+@app.get("/")
+def root():
+    return {"message": "Welcome to the ViloFury API 🚀"}
 
-    # Step 3: Use Vilofury fine-tuned model
-    if model:
+# ================================
+# /ask endpoint (Main)
+# ================================
+@app.get("/ask")
+async def ask(q: str, key: str, request: Request):
+    # Verify API key
+    if key != VILOFURY_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key.")
+
+    user_input = q.strip()
+
+    # 1️⃣ Check local intent-based response
+    intent_response = get_intent_response(user_input)
+    if intent_response:
+        return {"reply": intent_response}
+
+    # 2️⃣ Try Wikipedia summary if no intent matches
+    wiki_summary = get_wikipedia_summary(user_input)
+    if wiki_summary:
+        return {"reply": wiki_summary}
+
+    # 3️⃣ Use AI model if available
+    if model and tokenizer:
         try:
-            prompt = f"User: {user_input}\nViloFury:"
-            inputs = tokenizer(prompt, return_tensors="pt")
-            with torch.no_grad():
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=120,
-                    temperature=0.7,
-                    top_p=0.9,
-                    do_sample=True,
-                    pad_token_id=tokenizer.eos_token_id
-                )
-            full_reply = tokenizer.decode(outputs[0], skip_specia
+            inputs = tokenizer.encode(user_input, return_tensors="pt")
+            outputs = model.generate(inputs, max_length=80, num_return_sequences=1)
+            reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            return {"reply": reply}
+        except Exception as e:
+            print("⚠️ Model inference error:", e)
+
+    # 4️⃣ Default fallback
+    return {"reply": "They call me ViloFury in these digital streets!"}
