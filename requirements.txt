@@ -1,8 +1,11 @@
 fastapi
 uvicorn
 transformers
-torch==2.9.0
+torch
 python-dotenv
-wikipedia
+requests
+wikipedia-api
+
+
 
 
