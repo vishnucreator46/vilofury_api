@@ -1,104 +1,110 @@
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from difflib import SequenceMatcher
+from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
-import random
 import os
+import random
 import json
+from difflib import SequenceMatcher
 from wikipedia_api import get_wikipedia_summary  # your custom module
 
 # Load environment variables
 load_dotenv()
+
+# --- ENVIRONMENT VARIABLES ---
 VILOFURY_API_KEY = os.getenv("VILOFURY_API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
-# Initialize FastAPI app
-app = FastAPI(title="ViloFury API", version="1.0")
+app = FastAPI(title="ViloFury API", version="2.0")
 
-# ================================
-# Intent Data (local fallback)
-# ================================
-def load_intents():
-    try:
-        with open("intents.json", "r", encoding="utf-8") as file:
-            data = json.load(file)
-            print("🧠 Intents loaded successfully.")
-            return data
-    except Exception as e:
-        print("⚠️ Error loading intents:", e)
-        return {"intents": []}
+# --- CORS (allow all origins for frontend access) ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-intents = load_intents()
-
-# ================================
-# Load fine-tuned Hugging Face model
-# ================================
+# --- LOAD MODEL ---
 print("⚙️ Loading Vilofury fine-tuned model from Hugging Face...")
 
 try:
-    model_name = "vishnucreator46/vilofury-finetuned"
-    tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=True)
-    model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=True)
-    print("✅ Model loaded successfully from Hugging Face!")
+    model_name = "vishnu00l/vilofury-finetuned"
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token=HF_TOKEN)
+    model = AutoModelForCausalLM.from_pretrained(model_name, token=HF_TOKEN)
+    print("✅ Model loaded successfully!")
 except Exception as e:
-    print("❌ Error loading model:", e)
-    tokenizer, model = None, None
+    print(f"❌ Error loading model: {e}")
+    model, tokenizer = None, None
 
-# ================================
-# Helper: match user input to intent
-# ================================
-def get_intent_response(text):
-    best_match = None
-    highest_ratio = 0.0
 
-    for intent in intents.get("intents", []):
-        for pattern in intent.get("patterns", []):
-            ratio = SequenceMatcher(None, text.lower(), pattern.lower()).ratio()
-            if ratio > highest_ratio:
-                highest_ratio = ratio
-                best_match = intent
+# --- API KEY VALIDATION ---
+@app.middleware("http")
+async def verify_api_key(request: Request, call_next):
+    # Skip the home endpoint
+    if request.url.path in ["/", "/docs", "/openapi.json"]:
+        return await call_next(request)
 
-    if best_match and highest_ratio > 0.7:
-        return random.choice(best_match.get("responses", []))
-    return None
+    api_key = request.query_params.get("key") or request.headers.get("X-API-Key")
 
-# ================================
-# Root endpoint
-# ================================
+    if not api_key:
+        return JSONResponse(status_code=401, content={"error": "Missing API key"})
+    if api_key != VILOFURY_API_KEY:
+        return JSONResponse(status_code=401, content={"error": "Invalid API key"})
+
+    return await call_next(request)
+
+
+# --- ROOT ENDPOINT ---
 @app.get("/")
-def root():
-    return {"message": "Welcome to the ViloFury API 🚀"}
+def home():
+    return {"message": "🚀 Welcome to VILOFURY API — Your Intelligent Assistant"}
 
-# ================================
-# /ask endpoint (Main)
-# ================================
+
+# --- ASK ENDPOINT ---
 @app.get("/ask")
-async def ask(q: str, key: str, request: Request):
-    # Verify API key
-    if key != VILOFURY_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key.")
+async def ask(q: str, key: str = None):
+    if not q:
+        raise HTTPException(status_code=400, detail="Missing query parameter 'q'")
 
-    user_input = q.strip()
+    if not model or not tokenizer:
+        return {"error": "Model not loaded on the server."}
 
-    # 1️⃣ Check local intent-based response
-    intent_response = get_intent_response(user_input)
-    if intent_response:
-        return {"reply": intent_response}
+    try:
+        # Prepare input text
+        input_text = f"User: {q}\nViloFury:"
+        inputs = tokenizer(input_text, return_tensors="pt")
 
-    # 2️⃣ Try Wikipedia summary if no intent matches
-    wiki_summary = get_wikipedia_summary(user_input)
-    if wiki_summary:
-        return {"reply": wiki_summary}
+        # Generate model output
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=120,
+                temperature=0.8,
+                top_p=0.95,
+                do_sample=True
+            )
 
-    # 3️⃣ Use AI model if available
-    if model and tokenizer:
-        try:
-            inputs = tokenizer.encode(user_input, return_tensors="pt")
-            outputs = model.generate(inputs, max_length=80, num_return_sequences=1)
-            reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            return {"reply": reply}
-        except Exception as e:
-            print("⚠️ Model inference error:", e)
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        response = response.split("ViloFury:")[-1].strip()
 
-    # 4️⃣ Default fallback
-    return {"reply": "They call me ViloFury in these digital streets!"}
+        # If output empty or nonsensical, fallback to Wikipedia
+        if not response or len(response) < 2:
+            wiki_summary = get_wikipedia_summary(q)
+            if wiki_summary:
+                return {"reply": wiki_summary}
+            return {"reply": "I'm not sure about that, could you rephrase?"}
+
+        return {"reply": response}
+
+    except Exception as e:
+        print(f"⚠️ Error during /ask: {e}")
+        return {"error": "Something went wrong. Please try again later."}
+
+
+# --- EXTRA: SIMPLE TEST ENDPOINT ---
+@app.get("/test")
+def test():
+    return {"status": "ok", "model_loaded": model is not None}
