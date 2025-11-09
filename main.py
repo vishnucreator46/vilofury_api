@@ -41,10 +41,13 @@ except Exception as e:
     print(f"❌ Error loading model: {e}")
     model = None
 
+
 # --- Middleware for API Key Authentication ---
 @app.middleware("http")
 async def verify_api_key(request: Request, call_next):
-    if request.url.path in ["/", "/docs", "/openapi.json"]:
+    # Skip API key check for these routes
+    open_routes = ["/", "/docs", "/openapi.json", "/ask"]
+    if request.url.path in open_routes:
         return await call_next(request)
 
     api_key = request.headers.get("x-api-key")
@@ -53,10 +56,12 @@ async def verify_api_key(request: Request, call_next):
 
     return await call_next(request)
 
+
 # --- Root Route ---
 @app.get("/")
 async def home():
     return {"message": "🚀 Welcome to VILOFURY API — Your Intelligent Assistant"}
+
 
 # --- Ask Endpoint ---
 @app.get("/ask")
@@ -101,4 +106,3 @@ async def ask_vilofury(q: str):
         return {"reply": reply or "I'm still learning. Could you rephrase that?"}
 
     return {"reply": "⚠️ Model not loaded. Please check your Hugging Face path."}
-
