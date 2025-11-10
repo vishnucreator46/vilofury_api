@@ -32,7 +32,7 @@ def ask(q: str, key: str = None):
 
     try:
         response = requests.post(
-            f"https://api-inference.huggingface.co/models/{HF_MODEL}",
+            f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}",
             headers={"Authorization": f"Bearer {HF_TOKEN}"},
             json={"inputs": q},
             timeout=60
@@ -48,3 +48,4 @@ def ask(q: str, key: str = None):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
+
