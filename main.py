@@ -1,11 +1,12 @@
+# main.py (Vilofury Proxy API - lightweight version)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch, os, gc
+import os, requests
 
 app = FastAPI()
 
-# --- Enable CORS ---
+# Enable CORS for all origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,62 +15,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Environment Variables ---
-VILOFURY_KEY = os.getenv("VILOFURY_API_KEY")
-HF_TOKEN = os.getenv("HF_TOKEN")
-
-# --- Model repo name ---
-model_name = "vishnu00l/vilofury-finetuned"
-
-# --- Load model once on startup (CPU mode) ---
-print("🚀 Loading Vilofury model...")
-try:
-    tokenizer = AutoTokenizer.from_pretrained(model_name, token=HF_TOKEN)
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        device_map="auto",
-        torch_dtype=torch.float16
-    )
-    model.to("cpu")
-
-    print("✅ Model loaded successfully!")
-
-except Exception as e:
-    print(f"❌ Error during model loading: {e}")
-    model = None
-    tokenizer = None
+# Environment variables (set these in Render dashboard)
+VILOFURY_KEY = os.getenv("VILOFURY_API_KEY")  # Your own key for protection
+HF_TOKEN = os.getenv("HF_TOKEN")  # Hugging Face read token
+HF_MODEL = "vishnu00l/vilofury-finetuned"  # Your model name on HF
 
 @app.get("/")
 def home():
-    return {"message": "Vilofury API is live 🚀"}
+    return {"message": "Vilofury API (HuggingFace proxy) is live 🚀"}
 
 @app.get("/ask")
 def ask(q: str, key: str = None):
+    """Forward requests to Hugging Face Inference API."""
     if key != VILOFURY_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model not initialized. Check server logs.")
-
     try:
-        inputs = tokenizer(q, return_tensors="pt").to("cpu")
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=150,
-            do_sample=True,
-            temperature=0.7
+        response = requests.post(
+            f"https://api-inference.huggingface.co/models/{HF_MODEL}",
+            headers={"Authorization": f"Bearer {HF_TOKEN}"},
+            json={"inputs": q},
+            timeout=60
         )
 
-        reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        reply = reply.replace(q, "").strip()
-        if not reply:
-            reply = "I'm not sure how to answer that right now."
+        data = response.json()
+        if isinstance(data, list) and len(data) > 0 and "generated_text" in data[0]:
+            reply = data[0]["generated_text"].replace(q, "").strip()
+        else:
+            reply = str(data)
 
         return {"reply": reply}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
-
-    finally:
-        gc.collect()
