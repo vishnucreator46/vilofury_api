@@ -29,36 +29,37 @@ def home():
 
 @app.get("/ask")
 def ask(q: str, key: str = None):
+    # --- API key verification ---
     if key != VILOFURY_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     try:
-        # --- Load model and tokenizer on-demand ---
-        tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=HF_TOKEN)
+        # --- Load model and tokenizer ---
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=HF_TOKEN)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            use_auth_token=HF_TOKEN,
-            load_in_8bit=True,       # Load in 8-bit for lower RAM usage
-            device_map="auto"        # Automatically put model on GPU if available
-        )
+            torch_dtype=torch.float32,   # Use CPU-safe precision
+            low_cpu_mem_usage=True
+        ).to("cpu")
 
-        # --- Generate response ---
-        inputs = tokenizer(q, return_tensors="pt").to(model.device)
-        outputs = model.generate(**inputs, max_new_tokens=50)
+        # --- Generate reply ---
+        inputs = tokenizer(q, return_tensors="pt").to("cpu")
+        outputs = model.generate(**inputs, max_new_tokens=100)
         reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        reply = reply.replace(q, "").strip()
 
+        # Clean the reply
+        reply = reply.replace(q, "").strip()
         if not reply:
             reply = "I'm not sure how to answer that right now."
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating response: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
 
     finally:
-        # --- Free memory ---
-        del model, tokenizer, inputs, outputs
+        # --- Free memory safely ---
+        for var in ["model", "tokenizer", "inputs", "outputs"]:
+            if var in locals():
+                del locals()[var]
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
     return {"reply": reply}
