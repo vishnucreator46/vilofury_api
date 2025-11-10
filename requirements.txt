@@ -5,6 +5,7 @@ torch
 python-dotenv
 requests
 wikipedia-api
+accelerate
 
 
 
