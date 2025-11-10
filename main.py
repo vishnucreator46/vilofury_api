@@ -30,10 +30,12 @@ try:
     
     # Load Model - The fix is adding device_map="cpu" to bypass 8-bit loading logic.
     model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        low_cpu_mem_usage=True,
-        device_map="cpu" # <--- THIS IS THE CRITICAL FIX
-    ).to("cpu")
+    model_name,
+    device_map="auto",
+    torch_dtype=torch.float16
+)
+model.to("cpu")
+
     
     print("✅ Model loaded successfully!")
 
@@ -90,3 +92,4 @@ def ask(q: str, key: str = None):
     finally:
         # Clean up memory after generation
         gc.collect()
+
